@@ -1,0 +1,6 @@
+# Never commit a logged-in session, personal search config, or scan output.
+.session.json
+config.json
+out/
+node_modules/
+package-lock.json

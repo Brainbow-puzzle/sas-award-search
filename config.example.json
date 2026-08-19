@@ -1,0 +1,30 @@
+{
+  "_comment": "Copy to config.json and edit. urlTemplate is filled in by `node search.js capture`.",
+
+  "startUrl": "https://www.flysas.com/en/",
+  "urlTemplate": "",
+
+  "origins": ["CPH"],
+  "destinations": ["JFK", "EWR", "ORD", "SFO", "BKK", "NRT", "SIN", "LHR", "CDG", "BCN", "AGP", "MXP"],
+
+  "dates": {
+    "from": "2026-10-01",
+    "to": "2026-11-30",
+    "everyNDays": 1,
+    "weekdays": null,
+    "_weekdaysHelp": "null = every day. [5,0] = Fridays and Sundays only (0=Sun..6=Sat)."
+  },
+
+  "adults": 1,
+  "tripLengthDays": null,
+  "_tripLengthHelp": "null = one-way search. 7 = also request a return 7 days later.",
+
+  "headless": true,
+  "waitMs": 8000,
+  "settleSelector": null,
+  "_settleSelectorHelp": "Optional CSS selector that appears when results render; speeds up each search.",
+
+  "throttle": { "minMs": 4000, "maxMs": 9000 },
+  "premiumThreshold": 1.25,
+  "report": { "limit": 25, "perRoute": 3 }
+}
