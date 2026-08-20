@@ -415,6 +415,9 @@ async function cmdPull(argv) {
   const store = new Store(DB_PATH);
 
   let totalStored = 0, emptyStreak = 0, datelessWarned = false;
+  // Routes SAS declines to price at all, collected so the run can say which
+  // config entries are dead weight rather than leaving you to read the log.
+  const unsoldRoutes = new Set();
   try {
     for (let i = 0; i < limited.length; i++) {
       const t = limited[i];
@@ -431,20 +434,33 @@ async function cmdPull(argv) {
       }
 
       if (!res.json) {
-        const why = res.status === 403 || res.status === 503 ? "blocked"
+        // 400 is the endpoint answering, not refusing: it understood the request
+        // and will not price that route. SAS returns it for city pairs it does
+        // not sell, and no amount of retrying, re-sessioning or re-capturing
+        // changes that — so it must not be confused with being blocked, and must
+        // not count toward a streak that concludes the session has died.
+        const refusedRoute = res.status === 400 || res.status === 404;
+        const blocked = res.status === 403 || res.status === 503;
+        const why = refusedRoute ? "route not sold with points"
+          : blocked ? "blocked"
           : res.status === 401 || res.status === 302 ? "not authorised"
           : "no JSON";
         console.log(`HTTP ${res.status}, ${why}`);
-        emptyStreak++;
-        if (emptyStreak === 3) {
-          if (res.status === 403 || res.status === 503) {
-            console.log("\n  Three blocked responses. The endpoint is refusing this client, not your");
-            console.log("  account — no login will change it. Things left to try, in order:");
-            if (!viaPage) console.log("    - drop --via=request, so requests come from inside the page");
-            console.log("    - node search.js pull --headed --chrome   (a visible, real Chrome)");
-            console.log("    - node search.js capture                  (record what your browser sends)\n");
-          } else {
-            console.log("\n  Three non-JSON responses in a row — re-run `node search.js login`.\n");
+
+        if (refusedRoute) {
+          unsoldRoutes.add(`${t.origin}-${t.destination}`);
+        } else {
+          emptyStreak++;
+          if (emptyStreak === 3) {
+            if (blocked) {
+              console.log("\n  Three blocked responses. The endpoint is refusing this client, not your");
+              console.log("  account — no login will change it. Things left to try, in order:");
+              if (!viaPage) console.log("    - drop --via=request, so requests come from inside the page");
+              console.log("    - node search.js pull --headed --chrome   (a visible, real Chrome)");
+              console.log("    - node search.js capture                  (record what your browser sends)\n");
+            } else {
+              console.log("\n  Three non-JSON responses in a row — re-run `node search.js login`.\n");
+            }
           }
         }
         await sleep(throttleDelay(cfg));
@@ -494,6 +510,12 @@ async function cmdPull(argv) {
     console.log(`Database: ${DB_PATH}`);
     console.log(`  ${s.offers} offers across ${s.routes} route(s), ` +
       `${s.dateRange.lo || "-"} to ${s.dateRange.hi || "-"}`);
+    if (unsoldRoutes.size) {
+      console.log(`\n${unsoldRoutes.size} route(s) SAS would not price with points:`);
+      console.log(`  ${[...unsoldRoutes].join(", ")}`);
+      console.log("  Nothing is wrong — SAS does not sell these as award tickets from here.");
+      console.log("  Drop them from config.json destinations to stop spending requests on them.");
+    }
     store.close();
   }
   console.log(`\nNow query it, e.g.:\n  node search.js query --cheapest\n  node search.js query --cabin=business --saver\n`);

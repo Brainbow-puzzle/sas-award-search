@@ -63,6 +63,13 @@ const server = http.createServer((req, res) => {
   // seat information at all.
   if (pathname === "/bff/datepicker/flights/offers/v1") {
     const { origin, destination, departureDate, returnDate } = query;
+    // SAS answers 400 for city pairs it does not sell with points; NRT and SIN
+    // did exactly this on a real run. Reproduced so the handling stays honest.
+    if (["NRT", "SIN"].includes(destination)) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end("route not available");
+      return;
+    }
     const [y, m] = departureDate.split("-").map(Number);
     const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
     const iso = (d) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;

@@ -368,6 +368,11 @@ and `--chromium` opt out, and both are the settings that get you refused.
 This is also why the tool cannot run on a server or in CI: not the login, which
 turned out to be unnecessary, but the need for a real desktop browser.
 
+**HTTP 400 on some routes.** Not an error on your side. SAS answers 400 for city
+pairs it does not sell as award tickets from your origin, so no retry, session or
+capture changes it. `pull` lists those routes when the run ends; drop them from
+`config.json` to stop spending requests on them.
+
 **HTTP 403 on every request.** Cloudflare fronts www.sas.dk and refuses clients
 that are not a page. `pull` issues each request from *inside* a loaded sas.dk
 page, exactly as the site's own scripts do, so the browser supplies Origin,
