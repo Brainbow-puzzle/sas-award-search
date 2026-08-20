@@ -34,6 +34,30 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Calendar endpoint: a whole month of prices in one request, which is what the
+  // replay path is built to exploit.
+  if (pathname === "/api/calendar") {
+    const { from, to, month } = query;
+    const [y, m] = month.split("-").map(Number);
+    const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const out = [];
+    for (let d = 1; d <= days; d++) {
+      const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const eco = priceFor(from, to, iso);
+      if (eco === null) { out.push({ date: iso, bookable: false }); continue; }
+      out.push({
+        date: iso, bookable: true,
+        cabins: [
+          { cabin: "Economy", award: { points: eco, tax: { amount: 34.5, currencyCode: "EUR" } }, seatsAvailable: 4 },
+          { cabin: "Business", award: { points: eco * 3, tax: { amount: 88.0, currencyCode: "EUR" } }, seatsAvailable: 2 },
+        ],
+      });
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ calendar: { origin: from, destination: to, days: out } }));
+    return;
+  }
+
   if (pathname === "/api/offers") {
     const { from, to, out } = query;
     const iso = `${out.slice(0, 4)}-${out.slice(4, 6)}-${out.slice(6, 8)}`;
