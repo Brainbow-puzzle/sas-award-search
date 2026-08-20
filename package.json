@@ -10,7 +10,7 @@
     "pull": "node search.js pull",
     "query": "node search.js query",
     "report": "node search.js report",
-    "test": "node test-harvest.js && node test-plan.js",
+    "test": "node test-harvest.js && node test-plan.js && node test-diagnose.js",
     "test:e2e": "node test-e2e.js && node test-replay-e2e.js"
   },
   "dependencies": {

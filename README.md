@@ -4,8 +4,9 @@ Pulls SAS award prices into a **local SQLite database**, then lets you query it
 offline as much as you like — "cheapest business anywhere in March", "economy
 under 25k on a Friday", "what got cheaper since last week".
 
-flysas.com makes you search one route and one date at a time. This does the
-retrieval once, in bulk, and turns the answers into data you own.
+SAS makes you search one route at a time. This does the retrieval once, in
+bulk, and turns the answers into data you own — no EuroBonus login required for
+the low-price calendar.
 
 ---
 
@@ -58,20 +59,22 @@ the scanner refuses to search past.
 
 ## Why this runs on your machine
 
-SAS's award search is behind a EuroBonus login and its booking backend rejects
-plain HTTP clients. The tool drives a real Chromium session, so requests carry
-your logged-in cookies. Nothing about your account leaves your machine: you type
-your credentials into the real SAS page, and only a session file stays on disk
-(gitignored, along with `config.json` and `out/`).
+SAS's low-price calendar ("Lavpriskalender", with **Betal med point** ticked)
+shows award prices per date **without a login**, so the common case needs no
+credentials at all. What it does need is a real browser: the booking backend
+rejects plain HTTP clients, so the tool drives Chromium and reads the JSON the
+page fetches.
 
-It also can't run in CI or on a server — it needs your login.
+`login` remains available for anything your account sees that an anonymous
+visitor does not. If you use it, nothing about your account leaves your machine —
+you type your credentials into the real SAS page and only a session file stays on
+disk (gitignored, along with `config.json` and `out/`).
 
 ---
 
 ## Setup
 
 ```bash
-cd tools/sas-award-search
 npm install
 npx playwright install chromium
 cp config.example.json config.json     # set your origins, destinations, dates
@@ -81,24 +84,22 @@ Node 18+ is required; SQLite is built into Node 22+ and needs no install.
 
 ## Use it
 
-### 1. Log in (once)
-
-```bash
-node search.js login
-```
-
-A browser opens. Log in, handle 2FA, press Enter. Re-run whenever pulls start
-coming back empty — sessions expire.
-
-### 2. Capture a real search (once)
+### 1. Capture a real search (once)
 
 ```bash
 node search.js capture
 ```
 
-A browser opens. Run one award search by hand paying with points — **use the
-flexible-date/calendar view if there is one**. Press Enter, then tell it what
-you searched (origin, destination, dates) so the request can be re-aimed.
+A browser opens — **no login required**. Open the low-price calendar
+("Lavpriskalender"), tick **Betal med point** / **Pay with points**, pick your
+route and page to the month you want. Press Enter, then tell it what you
+searched (origin, destination, dates) so the request can be re-aimed.
+
+That calendar returns a whole month per request, which is what makes the bulk
+pull cheap. A single-date search works too, but costs roughly 30x the requests.
+
+If your account sees prices an anonymous visitor does not, run
+`node search.js login` first and capture again.
 
 It prints the recipes it built, best first:
 
@@ -109,6 +110,40 @@ It prints the recipes it built, best first:
 ```
 
 Raw payloads land in `out/captured/` if you ever need to look.
+
+### 2. Check the capture actually yielded prices
+
+```bash
+node search.js diagnose
+```
+
+This is the step that decides whether the rest of the tool is worth anything.
+It re-reads the payloads in `out/captured/` **offline** and reports, per
+response, how many prices were extractable and how well annotated they were:
+
+```
+  GET api.flysas.com/offers/calendar
+      312 price(s)  — CALENDAR-STYLE, covers a whole window per request
+      annotated: date 312/312  cabin 312/312  dest 312/312  taxes 300/312  seats 0/312
+      dates: 31 distinct, 2026-10-01 .. 2026-10-31
+```
+
+When nothing is found it does the useful thing instead of shrugging — it names
+the numbers the harvester *rejected* and where they live:
+
+```
+  POST api.flysas.com/graphql
+      no prices
+      1 number(s) in award range that the harvester ignored:
+        data.awardSearch.results[].bookingClasses[].redeemCost.qty
+          35,000, 105,000  (x16)
+      -> if any of those are award points, widen isPointsKey() in lib/harvest.js
+```
+
+Because it reads from disk, you can edit `lib/harvest.js` and re-run it as often
+as you like — **no second capture, no browser, no network**. It exits non-zero
+when no prices are extractable, so it also works as a smoke test after a SAS
+redesign.
 
 ### 3. Pull
 
@@ -194,10 +229,13 @@ payloads; the matchers are at the top of `lib/harvest.js`.
 ## Tests
 
 ```bash
-npm test                    # harvester + planning logic, no browser
+npm test                    # harvester, planning and diagnostics; no browser
 node test-e2e.js            # UI-driven path against the local mock site
 node test-replay-e2e.js     # capture -> recipe -> replay -> SQLite -> query
 ```
+
+If the preinstalled Chromium does not match your Playwright build, point the
+e2e suites at it: `CHROMIUM_PATH=/path/to/chrome node test-e2e.js`.
 
 `mock/server.js` serves fake award data over XHR, including a calendar
 endpoint, so the whole chain is verifiable offline. It says nothing about
@@ -207,7 +245,9 @@ whether any of this matches SAS's real site — only `capture` can tell you that
 
 ## Troubleshooting
 
-**Pulls return no JSON / HTTP 302.** Session expired: `node search.js login`.
+**Pulls return no JSON / HTTP 302.** If you captured while logged in, the session
+expired: `node search.js login`, then `capture` again. If you captured logged
+out, the recipe's headers or query shape have gone stale — re-run `capture`.
 
 **"no calendar-style request was captured".** Your capture recorded a
 single-date search. Re-run `capture` using the site's flexible-date view to cut
@@ -215,12 +255,13 @@ the request count dramatically.
 
 **"prices without dates" warning during a month pull.** The payload had prices
 whose dates the harvester couldn't locate, so they're dropped rather than
-guessed — guessing would stack a whole month onto one day. Check
-`out/captured/` and extend the date matcher.
+guessed — guessing would stack a whole month onto one day. `node search.js
+diagnose` reports the date-annotation gap and suggests the field to read.
 
-**Nothing found at all after capture.** No response carried recognisable points
-data. The raw payloads in `out/captured/` are what you need to extend
-`lib/harvest.js`.
+**Nothing found at all after capture.** Run `node search.js diagnose`. It names
+the fields holding numbers the harvester rejected, so you can widen a matcher in
+`lib/harvest.js` and re-run `diagnose` against the payloads already on disk —
+no second capture needed.
 
 **It got slow or started failing.** You're likely rate-limited. Raise
 `throttle` in config, pull a narrower range, space runs out.

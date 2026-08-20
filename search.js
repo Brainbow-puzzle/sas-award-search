@@ -39,7 +39,11 @@ const HTML_PATH = path.join(OUT_DIR, "report.html");
 const CAPTURE_DIR = path.join(OUT_DIR, "captured");
 const LEGACY_RESULTS = path.join(OUT_DIR, "offers.json");
 
-const DEFAULT_START_URL = "https://www.flysas.com/en/";
+// SAS's low-price calendar ("Lavpriskalender") shows award prices per date for a
+// whole month, and shows them WITHOUT a login. That is the cheapest possible
+// source: one request per month, no session to keep alive. Override via
+// config.startUrl if your market's site differs.
+const DEFAULT_START_URL = "https://www.sas.dk/";
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -394,6 +398,99 @@ function cmdReport() {
   throw new Error("No data yet — run `node search.js pull` (or `scan`) first.");
 }
 
+/* --------------------------------------------------------------- diagnose */
+
+/**
+ * Re-read the payloads `capture` saved and say, offline, whether prices can be
+ * extracted from them — and if not, exactly which field to teach the harvester.
+ */
+function cmdDiagnose(argv) {
+  const { diagnose } = require("./lib/diagnose.js");
+  const dir = argv.dir || CAPTURE_DIR;
+  const d = diagnose(dir);
+
+  if (argv.json) {
+    console.log(JSON.stringify(d, null, 2));
+    return;
+  }
+
+  console.log(`\nAnalysing ${d.payloads} saved payload(s) in ${dir}\n`);
+
+  for (const r of d.results) {
+    if (r.error) {
+      console.log(`  ${r.file}\n      unreadable: ${r.error}\n`);
+      continue;
+    }
+    const label = `${r.method} ${shortUrl(r.url)}`;
+    if (r.offers === 0) {
+      console.log(`  ${label}\n      no prices`);
+      if (r.nearMisses.length) {
+        console.log(`      ${r.nearMisses.length} number(s) in award range that the harvester ignored:`);
+        for (const g of r.nearMisses) {
+          console.log(`        ${g.shape}`);
+          console.log(`          ${g.samples.map(num).join(", ")}${g.count > g.samples.length ? `  (x${g.count})` : ""}`);
+        }
+        console.log("      -> if any of those are award points, widen isPointsKey() in lib/harvest.js");
+      } else {
+        const li = r.largestInteger;
+        console.log(`      nothing points-like at all${li !== null ? ` (largest integer: ${num(li)})` : ""}`);
+      }
+      console.log("");
+      continue;
+    }
+
+    console.log(`  ${label}\n      ${r.offers} price(s)${r.calendarStyle ? "  — CALENDAR-STYLE, covers a whole window per request" : ""}`);
+    const a = r.annotations;
+    console.log(`      annotated: date ${a.date}/${r.offers}  cabin ${a.cabin}/${r.offers}  ` +
+                `dest ${a.destination}/${r.offers}  taxes ${a.cash}/${r.offers}  seats ${a.seats}/${r.offers}`);
+    if (r.dates.count) console.log(`      dates: ${r.dates.count} distinct, ${r.dates.first} .. ${r.dates.last}`);
+
+    for (const [kind, m] of Object.entries(r.missingAnnotations)) {
+      const severity = kind === "date" ? "DROPPED BY PULL" : "degrades filters";
+      console.log(`      ${kind}: only ${m.have}/${m.of} annotated (${severity}); candidate field(s):`);
+      for (const c of m.candidates) {
+        console.log(`        ${c.shape}  e.g. ${c.samples.map((s) => JSON.stringify(s)).join(", ")}`);
+      }
+    }
+    console.log("");
+  }
+
+  console.log("-".repeat(64));
+  if (!d.totalOffers) {
+    console.log(`VERDICT: no prices extractable from any of ${d.payloads} payload(s).`);
+    console.log("\nThis is the answer that matters, and it is fixable: the payloads are on disk,");
+    console.log("so you can edit lib/harvest.js and re-run `diagnose` as often as you like");
+    console.log("without another login or another capture.");
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`VERDICT: ${num(d.totalOffers)} price(s) extractable from ${d.usablePayloads} of ${d.payloads} payload(s).`);
+  if (d.best) {
+    console.log(`Best source: ${d.best.method} ${shortUrl(d.best.url)} (${d.best.offers} prices` +
+                `${d.best.calendarStyle ? ", whole window per request" : ", one date per request"})`);
+    if (!d.best.calendarStyle) {
+      console.log("\nThat recipe covers a single date per request. Re-run `capture` using the");
+      console.log("site's flexible-date/calendar view to cut the request count dramatically.");
+    }
+  }
+  const dateGap = d.results.some((r) => r.offers > 0 && r.annotations.date < r.offers);
+  if (dateGap) {
+    console.log("\nWARNING: some prices carry no date. `pull` drops those rather than guessing,");
+    console.log("so they are silent losses. Extend the date matcher using the candidates above.");
+  }
+  console.log("");
+}
+
+/** Host + path only; capture URLs carry long query strings that wreck the layout. */
+function shortUrl(u) {
+  try {
+    const p = new URL(u);
+    return `${p.host}${p.pathname}`;
+  } catch {
+    return String(u).slice(0, 70);
+  }
+}
+
 /* ------------------------------------------------- scan (UI fallback path) */
 
 async function cmdScan(argv) {
@@ -462,8 +559,9 @@ function parseArgs(args) {
 const USAGE = `
 SAS EuroBonus award search
 
-  node search.js login                 log in once; saves the session
+  node search.js login                 optional: log in if prices need an account
   node search.js capture               record a real search to learn the price request
+  node search.js diagnose              re-check captured payloads offline: can prices be read?
   node search.js pull [--recipe=N]     replay it across routes/dates into the database
   node search.js query [filters]       look up the pulled data offline
   node search.js report                build the HTML calendar report
@@ -492,6 +590,7 @@ async function main() {
   switch (cmd) {
     case "login": return cmdLogin();
     case "capture": return cmdCapture();
+    case "diagnose": return cmdDiagnose(argv);
     case "pull": return cmdPull(argv);
     case "query": return cmdQuery(argv);
     case "report": return cmdReport();
