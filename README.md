@@ -22,17 +22,25 @@ rate-limit bait. This tool does something better:
 3. **`query`** — everything lands in SQLite, so lookups are instant, offline,
    and as arbitrary as you like.
 
-The big win is step 2. If the search you captured was a **flexible-date or
-calendar view**, one request returns a whole month, and the tool detects this
-automatically and iterates by month instead of by day:
+The big win is step 2 — and it comes with one real decision, which the tool
+leaves to you rather than making for you.
 
-```
-12 requests  ->  590 prices   (4 destinations x 3 months)
-```
+| | **month** per request | **day** per request |
+| --- | --- | --- |
+| Source | low-price calendar | a normal single-date search |
+| Cost | 12 requests → 590 prices | ~368 requests for the same span |
+| Carries | one headline price per date | price **per cabin**, seats, flight no. |
 
-The same coverage date-by-date would be 368 page loads. **So when you run
-`capture`, use the site's flexible-date view if it has one** — that single
-choice is what makes this cheap.
+The calendar is roughly 30x cheaper, and for "which dates have saver space" it
+is the right tool. But SAS's calendar reports a single figure per date, so if
+you want *business-class* prices — or seat counts — you need the day path.
+
+Capture either or both, then choose at pull time:
+
+```bash
+node search.js pull --granularity=month   # cheap sweep
+node search.js pull --granularity=day     # cabin-level detail
+```
 
 ---
 
@@ -95,8 +103,9 @@ A browser opens — **no login required**. Open the low-price calendar
 route and page to the month you want. Press Enter, then tell it what you
 searched (origin, destination, dates) so the request can be re-aimed.
 
-That calendar returns a whole month per request, which is what makes the bulk
-pull cheap. A single-date search works too, but costs roughly 30x the requests.
+For **cabin-level** prices, search one specific date instead of using the
+calendar — that is the request that returns per-cabin results. Capture both if
+you want the choice later; `pull --granularity=` then picks between them.
 
 If your account sees prices an anonymous visitor does not, run
 `node search.js login` first and capture again.
@@ -148,10 +157,16 @@ redesign.
 ### 3. Pull
 
 ```bash
-node search.js pull                # uses recipe [0]
-node search.js pull --recipe=1     # try another
-node search.js pull --limit=5      # small test run first
+node search.js pull                        # cheapest recipe captured
+node search.js pull --granularity=day      # one request per date, with cabins
+node search.js pull --granularity=month    # one request per month, no cabins
+node search.js pull --recipe=1             # pick an exact recipe by index
+node search.js pull --limit=5              # small test run first
 ```
+
+`--limit` first, always: it confirms the data looks right before committing to
+a few hundred requests. Asking for a granularity you never captured fails with
+the capture to re-run, rather than silently using the other one.
 
 ### 4. Query — this is the part you wanted
 
@@ -249,9 +264,14 @@ whether any of this matches SAS's real site — only `capture` can tell you that
 expired: `node search.js login`, then `capture` again. If you captured logged
 out, the recipe's headers or query shape have gone stale — re-run `capture`.
 
-**"no calendar-style request was captured".** Your capture recorded a
-single-date search. Re-run `capture` using the site's flexible-date view to cut
-the request count dramatically.
+**Pull wants far more requests than expected.** You are on a day-granularity
+recipe. That is correct if you want cabin-level prices; if you only need "which
+dates have space", capture the low-price calendar and use
+`pull --granularity=month`.
+
+**"No day-granularity recipe was captured".** Your capture only recorded the
+calendar. Re-run `capture` and search ONE specific date — that is the request
+that returns per-cabin prices.
 
 **"prices without dates" warning during a month pull.** The payload had prices
 whose dates the harvester couldn't locate, so they're dropped rather than

@@ -122,5 +122,78 @@ check("recommend caps entries per route", () => {
   assert.strictEqual(picks.filter((p) => p.destination === "BKK").length, 1);
 });
 
+
+/* --------------------------------------------------- recipe selection */
+
+const R = require("./lib/replay.js");
+
+const dayRecipe   = { name: "search", urlTemplate: "/s?d={date:YYYY-MM-DD}", offersInCapture: 12 };
+const dayRicher   = { name: "search2", urlTemplate: "/s2?d={date:YYYYMMDD}", offersInCapture: 40 };
+const monthRecipe = { name: "calendar", urlTemplate: "/c?m={date:YYYY-MM}", offersInCapture: 300 };
+const noneRecipe  = { name: "window", urlTemplate: "/w?o={origin}", offersInCapture: 50 };
+
+check("granularity is read from the date format spec", () => {
+  assert.strictEqual(R.dateGranularity(dayRecipe), "day");
+  assert.strictEqual(R.dateGranularity(monthRecipe), "month");
+  assert.strictEqual(R.dateGranularity(noneRecipe), "none");
+});
+
+check("selectRecipe defaults to the first recipe", () => {
+  const s = R.selectRecipe([monthRecipe, dayRecipe]);
+  assert.strictEqual(s.index, 0);
+  assert.strictEqual(s.recipe.name, "calendar");
+});
+
+check("an explicit index beats a granularity request", () => {
+  const s = R.selectRecipe([monthRecipe, dayRecipe], { index: 1, granularity: "month" });
+  assert.strictEqual(s.index, 1);
+  assert.strictEqual(s.recipe.name, "search");
+});
+
+check("--granularity=day picks a day recipe past a month one", () => {
+  const s = R.selectRecipe([monthRecipe, dayRecipe], { granularity: "day" });
+  assert.strictEqual(R.dateGranularity(s.recipe), "day");
+  assert.strictEqual(s.recipe.name, "search");
+});
+
+check("--granularity=day prefers the richest day recipe", () => {
+  const s = R.selectRecipe([monthRecipe, dayRecipe, dayRicher], { granularity: "day" });
+  assert.strictEqual(s.recipe.name, "search2", "should take the one with more prices");
+});
+
+check("--granularity=month still reachable when day sorts first", () => {
+  const s = R.selectRecipe([dayRecipe, monthRecipe], { granularity: "month" });
+  assert.strictEqual(s.recipe.name, "calendar");
+});
+
+check("asking for a granularity that was not captured explains the fix", () => {
+  assert.throws(
+    () => R.selectRecipe([monthRecipe], { granularity: "day" }),
+    /ONE specific date/,
+    "should tell you to capture a single-date search",
+  );
+});
+
+check("an out-of-range index is rejected", () => {
+  assert.throws(() => R.selectRecipe([monthRecipe], { index: 5 }), /No recipe \[5\]/);
+});
+
+check("an unknown granularity is rejected", () => {
+  assert.throws(() => R.selectRecipe([monthRecipe], { granularity: "hourly" }), /Unknown granularity/);
+});
+
+check("an empty recipe list points at capture", () => {
+  assert.throws(() => R.selectRecipe([]), /capture/);
+});
+
+check("index 0 is honoured rather than treated as absent", () => {
+  const s = R.selectRecipe([monthRecipe, dayRecipe], { index: 0, granularity: "day" });
+  assert.strictEqual(s.index, 0, "explicit 0 must not fall through to granularity");
+});
+
+check("a bare --recipe flag is rejected rather than read as 1", () => {
+  assert.throws(() => R.selectRecipe([monthRecipe, dayRecipe], { index: true }), /needs a number/);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

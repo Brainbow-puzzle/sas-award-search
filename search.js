@@ -152,9 +152,9 @@ function buildPullTasks(cfg, granularity) {
 async function cmdPull(argv) {
   const cfg = loadConfig();
   const { recipes } = loadRecipes();
-  const idx = Number(argv.recipe ?? 0);
-  const recipe = recipes[idx];
-  if (!recipe) throw new Error(`No recipe [${idx}] — recipes.json has ${recipes.length}.`);
+  const { recipe, index: idx } = replayLib.selectRecipe(recipes, {
+    index: argv.recipe, granularity: argv.granularity,
+  });
 
   const granularity = replayLib.dateGranularity(recipe);
   const tasks = buildPullTasks(cfg, granularity);
@@ -163,9 +163,27 @@ async function cmdPull(argv) {
   const perRequest = { day: "one date", month: "one month", none: "the endpoint's own window" };
   console.log(`Recipe [${idx}] ${recipe.name}`);
   console.log(`  each request covers ${perRequest[granularity]} — ${limited.length} request(s) to run`);
+
+  // Neither granularity is simply better; say what this one costs and what it
+  // buys, so the choice can be revisited before a long run rather than after.
   if (granularity === "day") {
-    console.log("  (no calendar-style request was captured; re-run `capture` using the site's");
-    console.log("   flexible-date view if it has one, to cover far more dates per request)");
+    const monthly = recipes.some((r) => replayLib.dateGranularity(r) === "month");
+    console.log("  one request per date: slower and more rate-limit exposure, but this is");
+    console.log("  the full search result, so cabin, seats and flight number come with it.");
+    if (monthly) {
+      console.log("  (a month-granularity recipe was also captured — `pull --granularity=month`");
+      console.log("   would cover the same span in far fewer requests, without cabins)");
+    }
+    if (limited.length > 200) {
+      console.log(`  NOTE: ${limited.length} requests at the configured throttle will take a while.`);
+      console.log("        Try `--limit=10` first to confirm the data looks right.");
+    }
+  } else {
+    const daily = recipes.some((r) => replayLib.dateGranularity(r) === "day");
+    if (daily) {
+      console.log("  (a day-granularity recipe was also captured — `pull --granularity=day`");
+      console.log("   costs ~30x the requests but carries cabin-level prices)");
+    }
   }
 
   const { launch } = require("./lib/browser.js");
@@ -563,6 +581,7 @@ SAS EuroBonus award search
   node search.js capture               record a real search to learn the price request
   node search.js diagnose              re-check captured payloads offline: can prices be read?
   node search.js pull [--recipe=N]     replay it across routes/dates into the database
+       --granularity=day|month         one request per date (rich) or per month (cheap)
   node search.js query [filters]       look up the pulled data offline
   node search.js report                build the HTML calendar report
   node search.js scan                  fallback: drive the UI page by page
