@@ -244,5 +244,36 @@ check("re-aiming the recipe swaps route and dates", () => {
   assert.ok(!out.includes("2026-09"), "no September should survive re-aiming");
 });
 
+/* ------------------------------- evidence-based granularity, SAS date picker */
+
+const sasRecipe = (datesInCapture) => R.buildRecipe(
+  { method: "GET", url: SAS_URL, headers: {}, postData: null },
+  SAS_OBSERVED, { offersInCapture: datesInCapture, datesInCapture });
+
+check("a URL naming a full date is day-granularity when it returns one date", () => {
+  assert.strictEqual(R.dateGranularity(sasRecipe(1)), "day");
+});
+
+check("the same URL is month-granularity when it returned a whole month", () => {
+  // This is the real case: departureDate=2026-09-01 answers for all of September.
+  assert.strictEqual(R.dateGranularity(sasRecipe(30)), "month");
+});
+
+check("the window threshold sits between a long weekend and a month", () => {
+  assert.strictEqual(R.dateGranularity(sasRecipe(3)), "day", "3 dates is not a window");
+  assert.strictEqual(R.dateGranularity(sasRecipe(7)), "month", "7 dates is");
+});
+
+check("a recipe with no capture evidence falls back to the URL shape", () => {
+  const r = R.buildRecipe({ method: "GET", url: SAS_URL, headers: {}, postData: null },
+    SAS_OBSERVED, {});
+  assert.strictEqual(R.dateGranularity(r), "day");
+});
+
+check("--granularity=month now reaches the date picker recipe", () => {
+  const s = R.selectRecipe([sasRecipe(30)], { granularity: "month" });
+  assert.strictEqual(R.dateGranularity(s.recipe), "month");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

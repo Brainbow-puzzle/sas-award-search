@@ -232,9 +232,18 @@ payloads survive redesigns that break CSS selectors.
 
 `lib/harvest.js` assumes **no schema**. It walks any JSON, pulls out every
 points-like number, and annotates it with the route, date, cabin, taxes and
-seat count it finds nearby — including from sibling branches, since real
-payloads scatter these. A backend field rename degrades the annotations instead
-of breaking the run.
+seat count it finds nearby — including from sibling branches and from
+**date-keyed maps**, since real payloads scatter these. A backend field rename
+degrades the annotations instead of breaking the run.
+
+Date-keyed maps matter because that is what SAS actually returns:
+
+```json
+{ "outbound": { "2026-09-08": { "points": 10000, "totalPrice": 284 } } }
+```
+
+The date is the *key*, not a value. Reading dates only from values yielded one
+undated row from a month of prices — and `pull` discards undated rows.
 
 If SAS changes enough that nothing is found, `out/captured/` has the raw
 payloads; the matchers are at the top of `lib/harvest.js`.

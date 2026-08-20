@@ -138,15 +138,36 @@ function buildPullTasks(cfg, granularity) {
       for (const date of anchors) {
         tasks.push({
           origin, destination, date,
-          returnDate: cfg.tripLengthDays
-            ? plan.toISO(new Date(plan.parseISO(date).getTime() + cfg.tripLengthDays * 86400000))
-            : null,
+          returnDate: returnDateFor(cfg, date, granularity),
           adults: cfg.adults || 1,
         });
       }
     }
   }
   return tasks;
+}
+
+/** Last day of the month `iso` falls in. */
+function endOfMonth(iso) {
+  const d = plan.parseISO(iso);
+  return plan.toISO(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)));
+}
+
+/**
+ * What to put in a recipe's {returnDate}.
+ *
+ * An explicit tripLengthDays always wins — that is someone asking for a real
+ * round trip. Failing that, a window recipe still needs *something*: SAS's date
+ * picker takes departureDate and returnDate as the bounds of the grid it
+ * returns (2026-09-01 .. 2026-09-30 for September), and materialize() throws
+ * rather than guess, so leaving it null would fail every request in the run.
+ * Spanning the anchor month reproduces exactly what the site itself sent.
+ */
+function returnDateFor(cfg, date, granularity) {
+  if (cfg.tripLengthDays) {
+    return plan.toISO(new Date(plan.parseISO(date).getTime() + cfg.tripLengthDays * 86400000));
+  }
+  return granularity === "month" ? endOfMonth(date) : null;
 }
 
 async function cmdPull(argv) {
@@ -184,6 +205,20 @@ async function cmdPull(argv) {
       console.log("  (a day-granularity recipe was also captured — `pull --granularity=day`");
       console.log("   costs ~30x the requests but carries cabin-level prices)");
     }
+  }
+
+  // Fail before opening a browser and burning the first request: materialize()
+  // throws per call, so a template the tasks cannot fill would otherwise report
+  // the same error once per request for the whole run.
+  try {
+    replayLib.materialize(recipe.urlTemplate, limited[0]);
+    if (recipe.bodyTemplate) replayLib.materialize(recipe.bodyTemplate, limited[0]);
+  } catch (e) {
+    throw new Error(
+      `${e.message}\n` +
+      "Set tripLengthDays in config.json if this recipe needs a return date, " +
+      "or capture a one-way search instead.",
+    );
   }
 
   const { launch } = require("./lib/browser.js");

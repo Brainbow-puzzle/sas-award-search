@@ -19,6 +19,39 @@ const cases = {
     expect: 2,
     require: { date: true, cabin: true, origin: true, cash: true },
   },
+  // The real shape of www.sas.dk/bff/datepicker/flights/offers/v1, captured
+  // 2026-08. Dates are object KEYS, not values, and the nested associatedFares
+  // map pairs each outbound date with every possible return date. Reading dates
+  // only from values yielded one undated row here, which `pull` then discarded.
+  "SAS date picker: date-keyed maps": {
+    payload: {
+      currency: "DKK",
+      outbound: {
+        "2026-09-01": {
+          totalPrice: 284, points: 10000, isStandardAward: true,
+          associatedFares: {
+            "2026-09-19": { totalPrice: 70, points: 10000, isStandardAward: true },
+            "2026-09-20": { totalPrice: 70, points: 10000, isStandardAward: true },
+          },
+        },
+        "2026-09-02": {
+          totalPrice: 284, points: 10000, isStandardAward: true,
+          associatedFares: {
+            "2026-09-19": { totalPrice: 70, points: 10000, isStandardAward: true },
+          },
+        },
+      },
+      inbound: {
+        "2026-09-19": { totalPrice: 70, points: 10000, isStandardAward: true },
+      },
+    },
+    // Four distinct dates survive: the outbound 1st and 2nd, plus the 19th and
+    // 20th reached through associatedFares. Points are identical throughout, so
+    // dedupe collapses each date to a single row — which is the right answer for
+    // "which dates have award space", the question this endpoint exists to serve.
+    expect: 4,
+    require: { date: true, cash: true },
+  },
   "nested itinerary tree": {
     payload: { data: { itineraries: [ {
       from: { iata: "ARN" }, to: { iata: "CDG" },
