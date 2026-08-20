@@ -303,6 +303,13 @@ whether any of this matches SAS's real site — only `capture` can tell you that
 
 ## Troubleshooting
 
+**HTTP 403 on every request.** Cloudflare fronts www.sas.dk and refuses clients
+that have not loaded a page: no `__cf_bm` cookie, no `Referer`, no `sec-fetch-*`.
+`pull` opens the site once before replaying, and `recipe` writes those headers
+in, so this should not happen — if it does, run `capture` to record what your
+browser actually sends. No login will fix a 403; it is refusing the client, not
+the account.
+
 **Pulls return no JSON / HTTP 302.** If you captured while logged in, the session
 expired: `node search.js login`, then `capture` again. If you captured logged
 out, the recipe's headers or query shape have gone stale — re-run `capture`.

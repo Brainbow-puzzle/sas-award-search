@@ -170,8 +170,21 @@ function cmdRecipe(argv) {
   const span = observed.returnDate ? daysBetween(observed.date, observed.returnDate) : 0;
   const datesInCapture = argv.window === false ? 0 : (span >= 7 ? span + 1 : 0);
 
+  // The headers a browser sends alongside this fetch. Cloudflare reads them to
+  // tell a page's own XHR from a bare client, and a request carrying only
+  // `accept` is answered with 403. These are what the real page sent.
+  const origin = new URL(url).origin;
+  const headers = {
+    accept: "*/*",
+    "accept-language": "en-US,en;q=0.9",
+    referer: `${origin}/`,
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+  };
+
   const recipe = replayLib.buildRecipe(
-    { method: (argv.method || "GET").toUpperCase(), url, headers: { accept: "*/*" }, postData: null },
+    { method: (argv.method || "GET").toUpperCase(), url, headers, postData: null },
     observed,
     { name: `GET ${new URL(url).pathname}`, offersInCapture: null, datesInCapture },
   );
@@ -322,6 +335,31 @@ async function cmdPull(argv) {
 
   const { launch } = require("./lib/browser.js");
   const { browser, context } = await launch({ headless: true, storageState: STATE_PATH });
+
+  // Load the site itself before calling its API.
+  //
+  // www.sas.dk sits behind Cloudflare, which issues its __cf_bm cookie to
+  // clients that have actually loaded a page. A context created fresh for the
+  // replay has no cookies and sends no Referer, and every request comes back
+  // 403. A browser never calls this endpoint cold either — the page loads
+  // first and its own scripts fetch afterwards, which is exactly what this
+  // reproduces. Failure is non-fatal: the requests still run, and their status
+  // codes say more than a guess here would.
+  const firstUrl = replayLib.materialize(recipe.urlTemplate, limited[0]);
+  const origin = new URL(firstUrl).origin;
+  process.stdout.write(`Opening ${origin} to establish a session ... `);
+  try {
+    const warmup = await context.newPage();
+    await warmup.goto(origin, { waitUntil: "domcontentloaded", timeout: 45000 });
+    // Bot-management scripts set their cookie after load, not during it.
+    await warmup.waitForTimeout(2500);
+    await warmup.close();
+    const named = (await context.cookies(origin)).map((c) => c.name);
+    console.log(named.length ? `${named.length} cookie(s)` : "no cookies set");
+  } catch (e) {
+    console.log(`could not open it (${e.message.split("\n")[0]})`);
+  }
+
   const store = new Store(DB_PATH);
 
   let totalStored = 0, emptyStreak = 0, datelessWarned = false;
@@ -339,10 +377,19 @@ async function cmdPull(argv) {
       }
 
       if (!res.json) {
-        console.log(`HTTP ${res.status}, no JSON (session may have expired)`);
+        const why = res.status === 403 || res.status === 503 ? "blocked"
+          : res.status === 401 || res.status === 302 ? "not authorised"
+          : "no JSON";
+        console.log(`HTTP ${res.status}, ${why}`);
         emptyStreak++;
         if (emptyStreak === 3) {
-          console.log("\n  Three non-JSON responses in a row — re-run `node search.js login`.\n");
+          if (res.status === 403 || res.status === 503) {
+            console.log("\n  Three blocked responses. The endpoint is refusing this client, not");
+            console.log("  refusing your account — no login will change it. Re-run `capture` so the");
+            console.log("  recipe carries the headers the site actually sends.\n");
+          } else {
+            console.log("\n  Three non-JSON responses in a row — re-run `node search.js login`.\n");
+          }
         }
         await sleep(throttleDelay(cfg));
         continue;
