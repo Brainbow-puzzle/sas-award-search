@@ -242,6 +242,7 @@ node search.js query --cabin=business --csv=biz.csv
 | `--from` `--to` | departure date range |
 | `--weekdays=5,0` | Fridays and Sundays (0 = Sunday) |
 | `--saver` | only dates at the cheapest price for that route+cabin |
+| `--direction=out\|return\|both` | which leg. Both by default; `--cheapest` defaults to `out` |
 | `--country=Spain` | by country name or ISO code (`--country=ES`) |
 | `--region="Southern Europe"` | Nordics, Baltics, British Isles, Western/Central/Southern Europe, North America, Asia, Middle East, Africa |
 | `--tag=beach` | `beach`, `city`, `ski`, `nature`. Comma-separated means **all** of them |
@@ -249,6 +250,37 @@ node search.js query --cabin=business --csv=biz.csv
 | `--by=country\|region\|tag\|duration\|city` | group, and show the cheapest in each |
 | `--order=points\|date\|cash\|seats` | sort |
 | `--csv[=path]` | also write CSV |
+
+### Both legs
+
+One request returns the whole month **in both directions** — SAS splits its
+answer into `outbound` and `inbound` — so returns cost no extra requests. They
+are stored flying the other way round, which is what they are:
+
+```
+DATE        DAY  ROUTE    LEG     COUNTRY  FLIGHT  POINTS    TAXES
+2026-09-01  Tue  CPH-AGP  out     Spain      3h35   9,000  284 DKK
+2026-09-01  Tue  AGP-CPH  return  Spain      3h35   9,000   70 DKK
+```
+
+Country and flight time follow the far end of the route, so a return from
+Málaga still groups under Spain rather than Denmark. `--direction=out` or
+`=return` narrows to one leg; `--cheapest` shows outbound only, since "where
+can I go" is a question about leaving.
+
+### Long runs
+
+A wide config is a long run — 100 destinations across 10 months is about 1000
+requests, and `pull` prints the estimate before starting. It does not have to be
+done in one sitting:
+
+```bash
+node search.js pull --resume        # skip route/months already pulled in the last 24h
+node search.js pull --resume=72     # ...or within any other window
+node search.js pull --limit=50      # or just do a chunk
+```
+
+Re-pulling is idempotent regardless; `--resume` only saves the requests.
 
 ### Grouping by where a place is, and what it is for
 
@@ -307,7 +339,7 @@ saver, red = above saver, grey = no space found.
 
 | Table | Holds |
 | --- | --- |
-| `offers` | current best-known price per route/date/cabin/flight |
+| `offers` | current best-known price per route/date/cabin/flight/leg |
 | `observations` | append-only log of every price ever seen, so `--changes` can tell you what moved |
 | `searches` | which windows were actually queried, so a gap means "no space" rather than "never looked" |
 

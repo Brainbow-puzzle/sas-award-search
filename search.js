@@ -250,6 +250,12 @@ function cmdRecipe(argv) {
 
 /* ------------------------------------------------------------------- pull */
 
+/** Report and stop before anything has been opened that needs closing. */
+async function browserlessExit(message) {
+  console.log(`\n${message}\n`);
+}
+
+
 /** Distinct YYYY-MM months touched by a date range. */
 function monthsBetween(from, to) {
   const out = [];
@@ -325,12 +331,39 @@ async function cmdPull(argv) {
   });
 
   const granularity = replayLib.dateGranularity(recipe);
-  const tasks = buildPullTasks(cfg, granularity);
+  const allTasks = buildPullTasks(cfg, granularity);
+
+  // --resume drops what a previous run already got, so a thousand-request pull
+  // can be done in sittings. Re-pulling is idempotent either way; this only
+  // saves the requests.
+  let tasks = allTasks;
+  let resumed = 0;
+  if (argv.resume) {
+    const hours = argv.resume === true ? 24 : Number(argv.resume);
+    const done = openStore();
+    let already;
+    try { already = done.searchedSince(hours); } finally { done.close(); }
+    tasks = allTasks.filter((t) => !already.has(`${t.origin}-${t.destination}|${t.date}`));
+    resumed = allTasks.length - tasks.length;
+    if (resumed) console.log(`Resuming: ${resumed} route/month(s) already pulled in the last ${hours}h.`);
+    if (!tasks.length) {
+      await browserlessExit(`Nothing left to pull — all ${allTasks.length} were done within ${hours}h.`);
+      return;
+    }
+  }
   const limited = argv.limit ? tasks.slice(0, Number(argv.limit)) : tasks;
 
   const perRequest = { day: "one date", month: "one month", none: "the endpoint's own window" };
   console.log(`Recipe [${idx}] ${recipe.name}`);
   console.log(`  each request covers ${perRequest[granularity]} — ${limited.length} request(s) to run`);
+
+  // A wide config is hours of work; say so before starting rather than after.
+  const avgWait = ((cfg.throttle?.minMs ?? 4000) + (cfg.throttle?.maxMs ?? 9000)) / 2000;
+  const mins = Math.round((limited.length * (avgWait + 1.5)) / 60);
+  if (mins >= 5) {
+    console.log(`  roughly ${mins} minute(s) at the configured throttle`);
+    console.log("  a browser window stays open throughout; --resume picks up where a stopped run left off");
+  }
 
   // Neither granularity is simply better; say what this one costs and what it
   // buys, so the choice can be revisited before a long run rather than after.
@@ -484,8 +517,13 @@ async function cmdPull(argv) {
 
       const usable = [];
       for (const o of offers) {
-        o.origin = o.origin || t.origin;
-        o.destination = o.destination || t.destination;
+        // The payload names no airports — they are only in the request — so the
+        // route comes from the task. A return leg flies it the other way round;
+        // taking the task's direction for both stored every return as though it
+        // departed from home.
+        const outbound = o.direction !== "inbound";
+        o.origin = o.origin || (outbound ? t.origin : t.destination);
+        o.destination = o.destination || (outbound ? t.destination : t.origin);
         if (!o.date && granularity === "day") o.date = t.date;
         o.cabinNorm = plan.normalizeCabin(o.cabin);
         if (o.date) usable.push(o);
@@ -498,7 +536,9 @@ async function cmdPull(argv) {
         from: t.date, to: t.date, recipe: recipe.name, offersFound: stored,
       });
       const dates = new Set(usable.map((o) => o.date)).size;
-      console.log(`${stored} price(s) across ${dates} date(s)`);
+      const back = usable.filter((o) => o.direction === "inbound").length;
+      console.log(`${stored} price(s) across ${dates} date(s)` +
+        (back ? ` (${usable.length - back} out, ${back} return)` : ""));
 
       emptyStreak = stored ? 0 : emptyStreak + 1;
       if (i < limited.length - 1) await sleep(throttleDelay(cfg));
@@ -555,6 +595,31 @@ const num = (n) => (n === null || n === undefined ? "" : Number(n).toLocaleStrin
  * store's LIMIT is raised when a place filter is on, or "cheapest beach" would
  * be picked from whichever 40 rows SQL happened to return first.
  */
+/**
+ * Which leg to report on. Both by default: a return is a real price for a real
+ * flight, and hiding it would repeat the bug this option exists to expose.
+ * `--cheapest` is the exception and defaults to outbound, since "where can I
+ * go" is a question about leaving, and returns would list home as a destination.
+ */
+function directionFilter(argv) {
+  const raw = argv.direction === true ? "" : String(argv.direction || "").toLowerCase();
+  if (!raw || raw === "both" || raw === "all") return null;
+  if (["out", "outbound", "there"].includes(raw)) return "outbound";
+  if (["return", "inbound", "back", "home"].includes(raw)) return "inbound";
+  throw new Error(`--direction=${argv.direction} is not a leg. Use out, return or both.`);
+}
+
+/**
+ * The end of the route that is not home.
+ *
+ * Grouping a return leg by its destination would file every one of them under
+ * Denmark, and "cheapest beach" would miss the flight home from Málaga. What
+ * makes a leg interesting is the far end, whichever way round it is flown.
+ */
+function awayEnd(row) {
+  return row.direction === "inbound" ? row.origin : row.destination;
+}
+
 function placeFilters(argv) {
   const tags = argv.tag && argv.tag !== true
     ? String(argv.tag).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
@@ -598,14 +663,14 @@ function groupBy(rows, facet) {
   const add = (key, row, p) => {
     const g = groups.get(key) || { key, rows: [], dests: new Set(), best: null, hours: [] };
     g.rows.push(row);
-    g.dests.add(row.destination);
+    g.dests.add(awayEnd(row));
     if (p.hours !== null) g.hours.push(p.hours);
     if (!g.best || row.points < g.best.points) g.best = row;
     groups.set(key, g);
   };
 
   for (const row of rows) {
-    const p = places.place(row.destination);
+    const p = places.place(awayEnd(row));
     if (facet === "tag") {
       if (!p.tags.length) add("(untagged)", row, p);
       for (const t of p.tags) add(t, row, p);
@@ -673,14 +738,15 @@ function cmdQuery(argv) {
         from: argv.from, to: argv.to, weekdays: null,
         maxCash: argv["max-cash"], minSeats: argv["min-seats"],
         saverOnly: !!argv.saver, order: "points", limit: 100000,
-      }).filter((r) => pf.keep(r.destination));
+        direction: directionFilter(argv),
+      }).filter((r) => pf.keep(awayEnd(r)));
 
       const groups = groupBy(all, facet);
       console.log(`\nCheapest by ${facet}${pf.active ? " (filtered)" : ""}:\n`);
       table(groups, [
         { label: facet.toUpperCase(), get: (g) => g.key },
         { label: "POINTS", get: (g) => num(g.best?.points), right: true },
-        { label: "WHERE", get: (g) => g.best?.destination || "" },
+        { label: "WHERE", get: (g) => (g.best ? awayEnd(g.best) : "") },
         { label: "DATE", get: (g) => g.best?.depart_date || "" },
         { label: "FLIGHT", get: (g) => (g.minHours === null ? ""
           : g.minHours === g.maxHours ? HOURS(g.minHours) : `${HOURS(g.minHours)}+`) },
@@ -696,6 +762,7 @@ function cmdQuery(argv) {
       const rows = store.cheapestPerDestination({
         origin: argv.origin, cabin: argv.cabin,
         from: argv.from, to: argv.to,
+        direction: directionFilter(argv) || "outbound",
         // Filtering happens after SQL, so fetch generously and trim below.
         limit: pf.active ? 100000 : Number(argv.limit) || 100,
       }).filter((r) => pf.keep(r.destination))
@@ -728,16 +795,18 @@ function cmdQuery(argv) {
       from: argv.from, to: argv.to, weekdays,
       maxCash: argv["max-cash"], minSeats: argv["min-seats"],
       saverOnly: !!argv.saver, order: argv.order || "points",
+      direction: directionFilter(argv),
       limit: pf.active ? 100000 : wanted,
-    }).filter((r) => pf.keep(r.destination)).slice(0, wanted);
+    }).filter((r) => pf.keep(awayEnd(r))).slice(0, wanted);
 
     console.log(`\n${rows.length} match(es):\n`);
     table(rows, [
       { label: "DATE", get: (r) => r.depart_date },
       { label: "DAY", get: (r) => report.weekdayOf(r.depart_date) },
       { label: "ROUTE", get: (r) => `${r.origin}-${r.destination}` },
-      { label: "COUNTRY", get: (r) => places.place(r.destination).country },
-      { label: "FLIGHT", get: (r) => HOURS(places.place(r.destination).hours), right: true },
+      { label: "LEG", get: (r) => (r.direction === "inbound" ? "return" : "out") },
+      { label: "COUNTRY", get: (r) => places.place(awayEnd(r)).country },
+      { label: "FLIGHT", get: (r) => HOURS(places.place(awayEnd(r)).hours), right: true },
       { label: "CABIN", get: (r) => r.cabin },
       { label: "POINTS", get: (r) => num(r.points), right: true },
       { label: "TAXES", get: (r) => (r.cash === null ? "" : `${num(Math.round(r.cash))} ${r.currency || ""}`), right: true },
@@ -972,6 +1041,7 @@ SAS EuroBonus award search
        --granularity=day|month         one request per date (rich) or per month (cheap)
        --headless --chromium           opt out of the visible real-Chrome default
        --via=request                   send requests beside the page, not from within it
+       --resume[=hours]                skip route/months already pulled (default 24h)
   node search.js query [filters]       look up the pulled data offline
   node search.js report                build the HTML calendar report
   node search.js scan                  fallback: drive the UI page by page
@@ -990,6 +1060,7 @@ Destination filters (from lib/places.js, not from SAS):
   --region="Southern Europe"  Nordics, Baltics, British Isles, Western/Central/Southern
                               Europe, North America, Asia, Middle East, Africa
   --tag=beach                 beach, city, ski, nature. Comma-separated means ALL of them
+  --direction=out|return|both both by default; --cheapest defaults to out
   --max-hours=4 --min-hours=  estimated non-stop flight time from Copenhagen
   --by=country|region|tag|duration|city
                               group and show the cheapest in each

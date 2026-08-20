@@ -52,6 +52,30 @@ const cases = {
     expect: 4,
     require: { date: true, cash: true },
   },
+  // Both legs of the date picker. The route is only in the request, so the leg
+  // has to come from the container name — otherwise the return half is stored
+  // as though it departed from home.
+  "SAS date picker: outbound and inbound legs": {
+    payload: {
+      currency: "DKK",
+      outbound: {
+        "2026-09-01": {
+          totalPrice: 284, points: 10000, isStandardAward: true,
+          associatedFares: { "2026-09-08": { totalPrice: 70, points: 10000 } },
+        },
+      },
+      inbound: {
+        "2026-09-08": {
+          totalPrice: 70, points: 10000, isStandardAward: true,
+          associatedFares: { "2026-09-01": { totalPrice: 284, points: 10000 } },
+        },
+      },
+    },
+    // One row per date per leg: the 1st outbound, the 8th back. The paired
+    // fares restate the same two flights and collapse into them.
+    expect: 2,
+    require: { date: true, direction: true },
+  },
   "nested itinerary tree": {
     payload: { data: { itineraries: [ {
       from: { iata: "ARN" }, to: { iata: "CDG" },
