@@ -195,5 +195,54 @@ check("a bare --recipe flag is rejected rather than read as 1", () => {
   assert.throws(() => R.selectRecipe([monthRecipe, dayRecipe], { index: true }), /needs a number/);
 });
 
+/* ------------------------------------------- parameterize, on a real URL */
+
+// SAS's date-picker endpoint, as captured from www.sas.dk. Two dates in one
+// query string is the case that broke the per-parameter replacement order.
+const SAS_URL = "https://www.sas.dk/bff/datepicker/flights/offers/v1" +
+  "?market=dk-da&departureDate=2026-09-01&returnDate=2026-09-30&bookingFlow=points" +
+  "&origin=CPH&destination=ARN&adult=1&child=0&infant=0&youth=0&tripType=RT";
+const SAS_OBSERVED = { origin: "CPH", destination: "ARN", date: "2026-09-01", returnDate: "2026-09-30" };
+
+check("a second date is not eaten by the first date's month form", () => {
+  const t = R.parameterize(SAS_URL, SAS_OBSERVED);
+  assert.ok(t.includes("returnDate={returnDate}"),
+    `returnDate was mangled: ${t.match(/returnDate=[^&]*/)[0]}`);
+  assert.ok(!t.includes("{date:YYYY-MM}-30"), "month form clobbered the return date");
+});
+
+check("both dates and both airports template out", () => {
+  const t = R.parameterize(SAS_URL, SAS_OBSERVED);
+  assert.ok(t.includes("departureDate={date}"), t);
+  assert.ok(t.includes("origin={origin}"), t);
+  assert.ok(t.includes("destination={destination}"), t);
+});
+
+check("non-varying query parameters survive untouched", () => {
+  const t = R.parameterize(SAS_URL, SAS_OBSERVED);
+  // bookingFlow=points is what makes the endpoint quote award prices at all.
+  assert.ok(t.includes("bookingFlow=points"), "the points flag must not be templated away");
+  assert.ok(t.includes("market=dk-da"), t);
+  assert.ok(t.includes("tripType=RT"), t);
+});
+
+check("the templated URL re-materialises to the original", () => {
+  const recipe = R.buildRecipe({ method: "GET", url: SAS_URL, headers: {}, postData: null },
+    SAS_OBSERVED, { offersInCapture: 60 });
+  const back = R.materialize(recipe.urlTemplate, SAS_OBSERVED);
+  assert.strictEqual(back, SAS_URL, "round-trip must be lossless");
+});
+
+check("re-aiming the recipe swaps route and dates", () => {
+  const recipe = R.buildRecipe({ method: "GET", url: SAS_URL, headers: {}, postData: null },
+    SAS_OBSERVED, { offersInCapture: 60 });
+  const out = R.materialize(recipe.urlTemplate,
+    { origin: "ARN", destination: "BKK", date: "2026-11-01", returnDate: "2026-11-30" });
+  assert.ok(out.includes("origin=ARN") && out.includes("destination=BKK"), out);
+  assert.ok(out.includes("departureDate=2026-11-01"), out);
+  assert.ok(out.includes("returnDate=2026-11-30"), out);
+  assert.ok(!out.includes("2026-09"), "no September should survive re-aiming");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
