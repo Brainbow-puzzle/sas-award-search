@@ -92,11 +92,34 @@ async function cmdLogin(argv) {
   });
 }
 
-/** Which browser build to drive: the installed Chrome, or Playwright's own. */
+/**
+ * Which browser build to drive.
+ *
+ * Defaults to the Chrome installed on this machine. Playwright's bundled
+ * Chromium is answered 403 by www.sas.dk where real Chrome is served normally,
+ * so the ordinary browser is the working default and the bundled one the
+ * opt-in. `launch` falls back on its own if Chrome is not installed.
+ */
 function browserChannel(argv, cfg) {
+  if (argv.chromium) return null;
   if (argv.chrome) return "chrome";
   if (argv.channel && argv.channel !== true) return argv.channel;
-  return cfg.browserChannel || null;
+  if (cfg.browserChannel !== undefined) return cfg.browserChannel;
+  return "chrome";
+}
+
+/**
+ * Headless is the obvious default for a long unattended run, and it is the one
+ * that does not work: SAS serves a headless browser 403 and a visible one the
+ * data. So a window opens during a pull unless --headless is asked for.
+ *
+ * config.headless is deliberately not consulted. It was written for `scan`,
+ * which drives the UI page by page, and it defaults to true in the example
+ * config — honouring it here would silently restore the broken setting for
+ * anyone who copied that file before this was understood.
+ */
+function pullHeadless(argv) {
+  return Boolean(argv.headless) && !argv.headed;
 }
 
 /* ---------------------------------------------------------------- capture */
@@ -346,7 +369,7 @@ async function cmdPull(argv) {
 
   const { launch } = require("./lib/browser.js");
   const { browser, context } = await launch({
-    headless: !argv.headed,
+    headless: pullHeadless(argv),
     storageState: STATE_PATH,
     channel: browserChannel(argv, cfg),
   });
@@ -797,7 +820,7 @@ SAS EuroBonus award search
   node search.js recipe                skip capture: build the recipe from a known URL
   node search.js pull [--recipe=N]     replay it across routes/dates into the database
        --granularity=day|month         one request per date (rich) or per month (cheap)
-       --headed --chrome               drive a visible / real-Chrome browser
+       --headless --chromium           opt out of the visible real-Chrome default
        --via=request                   send requests beside the page, not from within it
   node search.js query [filters]       look up the pulled data offline
   node search.js report                build the HTML calendar report

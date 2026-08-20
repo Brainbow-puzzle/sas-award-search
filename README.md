@@ -319,6 +319,15 @@ whether any of this matches SAS's real site — only `capture` can tell you that
 
 ## Troubleshooting
 
+**A browser window opens during `pull`. That is deliberate.** SAS answers a
+headless browser with 403 and a visible one with data, and it answers
+Playwright's bundled Chromium with 403 where it serves the Chrome you already
+have installed. So `pull` drives a visible, real Chrome by default. `--headless`
+and `--chromium` opt out, and both are the settings that get you refused.
+
+This is also why the tool cannot run on a server or in CI: not the login, which
+turned out to be unnecessary, but the need for a real desktop browser.
+
 **HTTP 403 on every request.** Cloudflare fronts www.sas.dk and refuses clients
 that are not a page. `pull` issues each request from *inside* a loaded sas.dk
 page, exactly as the site's own scripts do, so the browser supplies Origin,

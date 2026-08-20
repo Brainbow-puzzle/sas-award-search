@@ -42,5 +42,6 @@
     "limit": 25,
     "perRoute": 3
   },
-  "_urlTemplateHelp": "Only used by the `scan` fallback. The `pull` path uses out/recipes.json from `capture`."
+  "_urlTemplateHelp": "Only used by the `scan` fallback. The `pull` path uses out/recipes.json from `capture`.",
+  "_headlessHelp": "Applies to `scan` only. `pull` opens a visible window unless you pass --headless, because SAS refuses headless browsers."
 }
