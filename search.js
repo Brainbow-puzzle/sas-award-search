@@ -26,6 +26,7 @@ const path = require("path");
 
 const plan = require("./lib/plan.js");
 const report = require("./lib/report.js");
+const places = require("./lib/places.js");
 const replayLib = require("./lib/replay.js");
 const { Store } = require("./lib/store.js");
 
@@ -523,6 +524,92 @@ function table(rows, columns) {
 
 const num = (n) => (n === null || n === undefined ? "" : Number(n).toLocaleString("en-GB"));
 
+/**
+ * Narrow rows by facts about the destination rather than about the price.
+ *
+ * Country, tags and flight time are not in the database — SAS's payloads carry
+ * an IATA code and nothing else — so these cannot be pushed into SQL and are
+ * applied to the rows that come back. Nothing here widens a result set, so the
+ * store's LIMIT is raised when a place filter is on, or "cheapest beach" would
+ * be picked from whichever 40 rows SQL happened to return first.
+ */
+function placeFilters(argv) {
+  const tags = argv.tag && argv.tag !== true
+    ? String(argv.tag).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
+    : [];
+  const maxHours = argv["max-hours"] ? Number(argv["max-hours"]) : null;
+  const minHours = argv["min-hours"] ? Number(argv["min-hours"]) : null;
+  const country = argv.country && argv.country !== true ? String(argv.country) : null;
+  const region = argv.region && argv.region !== true ? String(argv.region).toLowerCase() : null;
+  const active = Boolean(tags.length || maxHours || minHours || country || region);
+
+  return {
+    active,
+    keep(code) {
+      const p = places.place(code);
+      if (country && !places.matchesCountry(code, country)) return false;
+      if (region && p.region.toLowerCase() !== region) return false;
+      // Every named tag must hold: --tag=beach,city means both, not either.
+      if (tags.length && !tags.every((t) => p.tags.includes(t))) return false;
+      // An unknown airport has no duration, so a duration filter cannot vouch for it.
+      if ((maxHours || minHours) && p.hours === null) return false;
+      if (maxHours && p.hours > maxHours) return false;
+      if (minHours && p.hours < minHours) return false;
+      return true;
+    },
+  };
+}
+
+const HOURS = (h) => (h === null ? "" : `${Math.floor(h)}h${String(Math.round((h - Math.floor(h)) * 60)).padStart(2, "0")}`);
+
+/** Group rows by a facet of the destination and report the cheapest in each. */
+function groupBy(rows, facet) {
+  const keyOf = {
+    country: (p) => p.country,
+    region: (p) => p.region,
+    duration: (p) => p.band,
+    tag: null, // handled below: a place can carry several
+    city: (p) => p.city,
+  }[facet];
+
+  const groups = new Map();
+  const add = (key, row, p) => {
+    const g = groups.get(key) || { key, rows: [], dests: new Set(), best: null, hours: [] };
+    g.rows.push(row);
+    g.dests.add(row.destination);
+    if (p.hours !== null) g.hours.push(p.hours);
+    if (!g.best || row.points < g.best.points) g.best = row;
+    groups.set(key, g);
+  };
+
+  for (const row of rows) {
+    const p = places.place(row.destination);
+    if (facet === "tag") {
+      if (!p.tags.length) add("(untagged)", row, p);
+      for (const t of p.tags) add(t, row, p);
+    } else {
+      add(keyOf(p), row, p);
+    }
+  }
+
+  const out = [...groups.values()].map((g) => ({
+    ...g,
+    minHours: g.hours.length ? Math.min(...g.hours) : null,
+    maxHours: g.hours.length ? Math.max(...g.hours) : null,
+  }));
+
+  // Duration bands are an ordered scale, so read them in time order — sorting
+  // those by price would put "3.5–5h" above "2–3.5h" on a tie. Every other
+  // facet is an unordered set of names, where cheapest-first is the useful sort.
+  if (facet === "duration") {
+    const rank = new Map(places.BANDS.map((b, i) => [b.label, i]));
+    return out.sort((a, b) => (rank.get(a.key) ?? 99) - (rank.get(b.key) ?? 99));
+  }
+  return out.sort((a, b) => (a.best?.points ?? Infinity) - (b.best?.points ?? Infinity));
+}
+
+const GROUPABLE = ["country", "region", "tag", "duration", "city"];
+
 function cmdQuery(argv) {
   const store = openStore();
   try {
@@ -552,14 +639,51 @@ function cmdQuery(argv) {
       return;
     }
 
+    if (argv.by) {
+      const facet = String(argv.by).toLowerCase();
+      if (!GROUPABLE.includes(facet)) {
+        throw new Error(`--by=${argv.by} is not a grouping. Use: ${GROUPABLE.join(", ")}.`);
+      }
+      const pf = placeFilters(argv);
+      const all = store.query({
+        origin: argv.origin, destination: argv.destination, cabin: argv.cabin,
+        maxPoints: argv["max-points"], minPoints: argv["min-points"],
+        from: argv.from, to: argv.to, weekdays: null,
+        maxCash: argv["max-cash"], minSeats: argv["min-seats"],
+        saverOnly: !!argv.saver, order: "points", limit: 100000,
+      }).filter((r) => pf.keep(r.destination));
+
+      const groups = groupBy(all, facet);
+      console.log(`\nCheapest by ${facet}${pf.active ? " (filtered)" : ""}:\n`);
+      table(groups, [
+        { label: facet.toUpperCase(), get: (g) => g.key },
+        { label: "POINTS", get: (g) => num(g.best?.points), right: true },
+        { label: "WHERE", get: (g) => g.best?.destination || "" },
+        { label: "DATE", get: (g) => g.best?.depart_date || "" },
+        { label: "FLIGHT", get: (g) => (g.minHours === null ? ""
+          : g.minHours === g.maxHours ? HOURS(g.minHours) : `${HOURS(g.minHours)}+`) },
+        { label: "DESTS", get: (g) => g.dests.size, right: true },
+        { label: "DATES", get: (g) => g.rows.length, right: true },
+      ]);
+      console.log("");
+      return;
+    }
+
     if (argv.cheapest) {
+      const pf = placeFilters(argv);
       const rows = store.cheapestPerDestination({
         origin: argv.origin, cabin: argv.cabin,
-        from: argv.from, to: argv.to, limit: Number(argv.limit) || 100,
-      });
-      console.log("\nCheapest points price per destination:\n");
+        from: argv.from, to: argv.to,
+        // Filtering happens after SQL, so fetch generously and trim below.
+        limit: pf.active ? 100000 : Number(argv.limit) || 100,
+      }).filter((r) => pf.keep(r.destination))
+        .slice(0, Number(argv.limit) || 100);
+      console.log(`\nCheapest points price per destination${pf.active ? " (filtered)" : ""}:\n`);
       table(rows, [
         { label: "DEST", get: (r) => r.destination },
+        { label: "CITY", get: (r) => places.place(r.destination).city },
+        { label: "COUNTRY", get: (r) => places.place(r.destination).country },
+        { label: "FLIGHT", get: (r) => HOURS(places.place(r.destination).hours), right: true },
         { label: "CABIN", get: (r) => r.cabin },
         { label: "POINTS", get: (r) => num(r.points), right: true },
         { label: "DATES", get: (r) => r.dates_available, right: true },
@@ -574,20 +698,24 @@ function cmdQuery(argv) {
       ? String(argv.weekdays).split(",").map((n) => Number(n.trim())).filter((n) => !Number.isNaN(n))
       : null;
 
+    const pf = placeFilters(argv);
+    const wanted = Number(argv.limit) || 40;
     const rows = store.query({
       origin: argv.origin, destination: argv.destination, cabin: argv.cabin,
       maxPoints: argv["max-points"], minPoints: argv["min-points"],
       from: argv.from, to: argv.to, weekdays,
       maxCash: argv["max-cash"], minSeats: argv["min-seats"],
       saverOnly: !!argv.saver, order: argv.order || "points",
-      limit: Number(argv.limit) || 40,
-    });
+      limit: pf.active ? 100000 : wanted,
+    }).filter((r) => pf.keep(r.destination)).slice(0, wanted);
 
     console.log(`\n${rows.length} match(es):\n`);
     table(rows, [
       { label: "DATE", get: (r) => r.depart_date },
       { label: "DAY", get: (r) => report.weekdayOf(r.depart_date) },
       { label: "ROUTE", get: (r) => `${r.origin}-${r.destination}` },
+      { label: "COUNTRY", get: (r) => places.place(r.destination).country },
+      { label: "FLIGHT", get: (r) => HOURS(places.place(r.destination).hours), right: true },
       { label: "CABIN", get: (r) => r.cabin },
       { label: "POINTS", get: (r) => num(r.points), right: true },
       { label: "TAXES", get: (r) => (r.cash === null ? "" : `${num(Math.round(r.cash))} ${r.currency || ""}`), right: true },
@@ -834,10 +962,23 @@ Query filters:
   --max-points=60000 --min-points=0 --max-cash=500 --min-seats=2
   --from=2026-10-01 --to=2026-12-31 --weekdays=5,0
   --saver                     only dates at the cheapest price for that route+cabin
+
+Destination filters (from lib/places.js, not from SAS):
+  --country=Spain             or an ISO code: --country=ES
+  --region="Southern Europe"  Nordics, Baltics, British Isles, Western/Central/Southern
+                              Europe, North America, Asia, Middle East, Africa
+  --tag=beach                 beach, city, ski, nature. Comma-separated means ALL of them
+  --max-hours=4 --min-hours=  estimated non-stop flight time from Copenhagen
+  --by=country|region|tag|duration|city
+                              group and show the cheapest in each
   --order=points|date|cash|seats --limit=40
   --csv[=path]                also write the results as CSV
 
 Examples:
+  node search.js query --by=country
+  node search.js query --tag=beach --max-hours=4 --cheapest
+  node search.js query --by=duration --max-points=20000
+  node search.js query --country=Spain --order=date
   node search.js query --cheapest --cabin=business
   node search.js query --max-points=30000 --from=2026-10-01 --to=2026-11-30
   node search.js query --destination=BKK --saver --order=date

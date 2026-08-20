@@ -242,8 +242,48 @@ node search.js query --cabin=business --csv=biz.csv
 | `--from` `--to` | departure date range |
 | `--weekdays=5,0` | Fridays and Sundays (0 = Sunday) |
 | `--saver` | only dates at the cheapest price for that route+cabin |
+| `--country=Spain` | by country name or ISO code (`--country=ES`) |
+| `--region="Southern Europe"` | Nordics, Baltics, British Isles, Western/Central/Southern Europe, North America, Asia, Middle East, Africa |
+| `--tag=beach` | `beach`, `city`, `ski`, `nature`. Comma-separated means **all** of them |
+| `--max-hours=4` `--min-hours` | estimated non-stop flight time from Copenhagen |
+| `--by=country\|region\|tag\|duration\|city` | group, and show the cheapest in each |
 | `--order=points\|date\|cash\|seats` | sort |
 | `--csv[=path]` | also write CSV |
+
+### Grouping by where a place is, and what it is for
+
+SAS sends an IATA code and nothing else, so "cheapest beach under four hours"
+needs facts no award endpoint will ever return. Those live in `lib/places.js`:
+city, country, region and a small tag vocabulary per airport.
+
+```bash
+node search.js query --by=country
+node search.js query --by=duration --max-points=20000
+node search.js query --tag=beach --max-hours=4 --cheapest
+node search.js query --country=Spain --order=date
+```
+
+```
+Cheapest by duration:
+
+  DURATION  POINTS  WHERE  DATE        FLIGHT  DESTS  DATES
+  under 2h   6,000  ARN    2026-10-04  1h11+       3     36
+  2–3.5h     9,000  PMI    2026-10-04  2h43+       2     24
+  3.5–5h     9,000  AGP    2026-10-04  3h34+       3     36
+  5–9h      15,000  TFS    2026-10-04  5h19+       2     24
+  over 9h   70,000  CUN    2026-10-04  10h18+      4     48
+```
+
+**Flight time is computed, not looked up.** Each airport carries coordinates and
+the duration comes from great-circle distance at a fixed block speed, so there
+is one formula to check rather than 150 hand-typed numbers to audit. It models a
+**non-stop**, which makes it a lower bound: a connecting routing takes longer,
+and nothing here knows which one you would fly. Compared against published SAS
+times it lands within ~15 minutes up to five hours, and runs up to an hour
+optimistic on the longest sectors, where real routings track jetstreams.
+
+An airport that is not in the table still queries fine — it groups under
+`Unknown` and is excluded by duration filters, which cannot vouch for it.
 
 The database is plain SQLite at `out/awards.db` — point any tool at it:
 
