@@ -362,25 +362,31 @@ async function cmdPull(argv) {
   // codes say more than a guess here would.
   const firstUrl = replayLib.materialize(recipe.urlTemplate, limited[0]);
   const origin = new URL(firstUrl).origin;
-  process.stdout.write(`Opening ${origin} to establish a session ... `);
+  const viaPage = argv.via !== "request";
+  let page = null;
+
+  process.stdout.write(`Opening ${origin} ... `);
   try {
-    const warmup = await context.newPage();
-    await warmup.goto(origin, { waitUntil: "domcontentloaded", timeout: 45000 });
-    // Bot-management scripts set their cookie after load, not during it.
-    await warmup.waitForTimeout(2500);
-    await warmup.close();
+    page = await context.newPage();
+    await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 45000 });
+    // Bot-management scripts run after load, not during it.
+    await page.waitForTimeout(2500);
     const named = (await context.cookies(origin)).map((c) => c.name);
-    const cleared = named.includes("__cf_bm");
-    console.log(named.length ? `${named.length} cookie(s)${cleared ? ", including __cf_bm" : ""}` : "no cookies set");
-    if (!cleared) {
-      console.log("  Cloudflare has not cleared this browser (no __cf_bm), so requests are");
-      console.log("  likely to be refused. Run `node search.js session --chrome` first: it");
-      console.log("  opens a real window where you can accept the cookie banner, and saves");
-      console.log("  the result for `pull` to reuse.");
-    }
+    console.log(named.length ? `${named.length} cookie(s)` : "no cookies set");
   } catch (e) {
     console.log(`could not open it (${e.message.split("\n")[0]})`);
+    if (page) { await page.close().catch(() => {}); page = null; }
   }
+  if (viaPage && !page) {
+    await browser.close();
+    throw new Error(
+      `Could not open ${origin}, and requests are issued from that page.\n` +
+      "Check the site loads in your own browser, or pass --via=request to send them beside it.",
+    );
+  }
+  console.log(viaPage
+    ? "  requesting from inside the page, as the site's own scripts do"
+    : "  requesting beside the page (--via=request)");
 
   const store = new Store(DB_PATH);
 
@@ -392,7 +398,9 @@ async function cmdPull(argv) {
 
       let res;
       try {
-        res = await replayLib.replay(context.request, recipe, t, { timeout: cfg.waitMs ?? 30000 });
+        res = viaPage
+          ? await replayLib.replayInPage(page, recipe, t, { timeout: cfg.waitMs ?? 30000 })
+          : await replayLib.replay(context.request, recipe, t, { timeout: cfg.waitMs ?? 30000 });
       } catch (e) {
         console.log(`error: ${e.message.split("\n")[0]}`);
         continue;
@@ -406,9 +414,11 @@ async function cmdPull(argv) {
         emptyStreak++;
         if (emptyStreak === 3) {
           if (res.status === 403 || res.status === 503) {
-            console.log("\n  Three blocked responses. The endpoint is refusing this client, not");
-            console.log("  refusing your account — no login will change it. Re-run `capture` so the");
-            console.log("  recipe carries the headers the site actually sends.\n");
+            console.log("\n  Three blocked responses. The endpoint is refusing this client, not your");
+            console.log("  account — no login will change it. Things left to try, in order:");
+            if (!viaPage) console.log("    - drop --via=request, so requests come from inside the page");
+            console.log("    - node search.js pull --headed --chrome   (a visible, real Chrome)");
+            console.log("    - node search.js capture                  (record what your browser sends)\n");
           } else {
             console.log("\n  Three non-JSON responses in a row — re-run `node search.js login`.\n");
           }
@@ -788,6 +798,7 @@ SAS EuroBonus award search
   node search.js pull [--recipe=N]     replay it across routes/dates into the database
        --granularity=day|month         one request per date (rich) or per month (cheap)
        --headed --chrome               drive a visible / real-Chrome browser
+       --via=request                   send requests beside the page, not from within it
   node search.js query [filters]       look up the pulled data offline
   node search.js report                build the HTML calendar report
   node search.js scan                  fallback: drive the UI page by page

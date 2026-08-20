@@ -319,10 +319,18 @@ whether any of this matches SAS's real site — only `capture` can tell you that
 
 ## Troubleshooting
 
-**HTTP 403 on every request.** Run `node search.js session --chrome`, accept the
-cookie banner, then pull again. `pull` reports whether it has `__cf_bm` before it
-starts, which is the cookie that decides this. If it still fails, add `--headed
---chrome` to `pull` so the whole run happens in a visible real Chrome.
+**HTTP 403 on every request.** Cloudflare fronts www.sas.dk and refuses clients
+that are not a page. `pull` issues each request from *inside* a loaded sas.dk
+page, exactly as the site's own scripts do, so the browser supplies Origin,
+Referer, sec-fetch-* and cookies itself — those are forbidden headers that
+script cannot set, which is why setting them by hand does not work. If it is
+still refused, in order:
+
+```bash
+node search.js session --chrome         # settle the cookie banner in a real Chrome
+node search.js pull --headed --chrome   # run the whole pull in a visible Chrome
+node search.js capture                  # record what your browser actually sends
+```
 
 **Older note —** Cloudflare fronts www.sas.dk and refuses clients
 that have not loaded a page: no `__cf_bm` cookie, no `Referer`, no `sec-fetch-*`.
