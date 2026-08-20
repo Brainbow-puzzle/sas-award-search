@@ -92,7 +92,28 @@ Node 18+ is required; SQLite is built into Node 22+ and needs no install.
 
 ## Use it
 
-### 1. Capture a real search (once)
+### 1. Get a recipe
+
+The endpoint SAS's low-price calendar uses is already known, so there is nothing
+to discover and no browser to drive:
+
+```bash
+node search.js recipe
+```
+
+That writes `out/recipes.json` pointing at
+
+```
+GET www.sas.dk/bff/datepicker/flights/offers/v1?...&bookingFlow=points
+```
+
+a plain GET needing no login, where one request covers a whole month for a
+route. Skip straight to step 3.
+
+<details>
+<summary>If SAS has changed the endpoint, rediscover it by hand</summary>
+
+### Capture a real search
 
 ```bash
 node search.js capture
@@ -118,9 +139,19 @@ It prints the recipes it built, best first:
       varies: origin, destination, date
 ```
 
-Raw payloads land in `out/captured/` if you ever need to look.
+Raw payloads land in `out/captured/` if you ever need to look. You can also
+hand a URL straight to `recipe` instead:
 
-### 2. Check the capture actually yielded prices
+```bash
+node search.js recipe --url="https://www.sas.dk/...&origin=CPH&departureDate=2026-09-01"
+```
+
+It reads the route and dates out of the query string by shape, so `--origin`,
+`--destination` and `--date` are only needed when that is ambiguous.
+
+</details>
+
+### 2. Check that prices can actually be read
 
 ```bash
 node search.js diagnose

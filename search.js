@@ -101,6 +101,105 @@ async function cmdCapture() {
   });
 }
 
+/* ----------------------------------------------------------------- recipe */
+
+/**
+ * SAS's low-price calendar endpoint, as captured from www.sas.dk in Aug 2026.
+ *
+ * `capture` exists to *discover* which request returns prices. Once that is
+ * known there is nothing left to discover, so a recipe can be written straight
+ * from the URL — no browser, no human clicking through a calendar. Keeping the
+ * known one here means a fresh clone can pull without capturing anything.
+ *
+ * If SAS changes the endpoint this goes stale; `capture` remains the way to
+ * rediscover it, and `diagnose` the way to tell that it has gone stale.
+ */
+const KNOWN_URL =
+  "https://www.sas.dk/bff/datepicker/flights/offers/v1" +
+  "?market=dk-da&departureDate=2026-09-01&returnDate=2026-09-30&bookingFlow=points" +
+  "&origin=CPH&destination=ARN&adult=1&child=0&infant=0&youth=0&tripType=RT";
+
+const IATA_RE = /^[A-Z]{3}$/;
+const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Work out which query parameters carried the route and dates, so the URL can
+ * be turned into a template. Values are validated by shape rather than trusted
+ * by name: `from` means origin on one site and departure date on another.
+ */
+function inferObserved(url, argv) {
+  const q = new URL(url).searchParams;
+  const firstMatching = (names, test) => {
+    for (const n of names) {
+      const v = (q.get(n) || "").trim();
+      if (v && test(v)) return v;
+    }
+    return null;
+  };
+  const iata = (v) => IATA_RE.test(v.toUpperCase());
+  const iso = (v) => ISO_RE.test(v);
+
+  return {
+    origin: (argv.origin || firstMatching(["origin", "from", "departureAirport", "originCode"], iata) || "").toUpperCase() || null,
+    destination: (argv.destination || firstMatching(["destination", "to", "arrivalAirport", "destinationCode"], iata) || "").toUpperCase() || null,
+    date: argv.date || firstMatching(["departureDate", "outboundDate", "date", "from"], iso),
+    returnDate: argv.returnDate || firstMatching(["returnDate", "inboundDate", "to"], iso),
+  };
+}
+
+/** Whole days between two ISO dates. */
+function daysBetween(a, b) {
+  return Math.round((plan.parseISO(b) - plan.parseISO(a)) / 86400000);
+}
+
+function cmdRecipe(argv) {
+  const url = argv.url === true ? null : (argv.url || KNOWN_URL);
+  if (!url) throw new Error("--url needs a value, e.g. --url=\"https://...\"");
+
+  const observed = inferObserved(url, argv);
+  const missing = ["origin", "destination", "date"].filter((k) => !observed[k]);
+  if (missing.length) {
+    throw new Error(
+      `Could not tell which query parameter holds: ${missing.join(", ")}.\n` +
+      `Pass them explicitly, e.g. --origin=CPH --destination=ARN --date=2026-09-01`,
+    );
+  }
+
+  // A request whose two dates span a week or more was asking for a window, not
+  // a single departure — which is what makes one request cover a whole month.
+  const span = observed.returnDate ? daysBetween(observed.date, observed.returnDate) : 0;
+  const datesInCapture = argv.window === false ? 0 : (span >= 7 ? span + 1 : 0);
+
+  const recipe = replayLib.buildRecipe(
+    { method: (argv.method || "GET").toUpperCase(), url, headers: { accept: "*/*" }, postData: null },
+    observed,
+    { name: `GET ${new URL(url).pathname}`, offersInCapture: null, datesInCapture },
+  );
+
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  const existing = fs.existsSync(RECIPES_PATH)
+    ? JSON.parse(fs.readFileSync(RECIPES_PATH, "utf8"))
+    : { recipes: [] };
+  // Newest first, so `pull` with no arguments uses what was just written.
+  const recipes = [recipe, ...(existing.recipes || [])];
+  fs.writeFileSync(RECIPES_PATH, JSON.stringify(
+    { capturedAt: new Date().toISOString(), observed, recipes }, null, 2));
+
+  const granularity = replayLib.dateGranularity(recipe);
+  console.log(`\nWrote recipe [0] to ${RECIPES_PATH}\n`);
+  console.log(`  ${recipe.name}`);
+  console.log(`  varies: ${recipe.parameters.join(", ")}`);
+  console.log(`  granularity: ${granularity}` +
+    (granularity === "month" ? "  (one request per month per route)" : "  (one request per date)"));
+  console.log(`  read from: ${observed.origin}->${observed.destination} ${observed.date}` +
+    (observed.returnDate ? ` .. ${observed.returnDate}` : ""));
+  if (argv.url === undefined) {
+    console.log("\n  Using the built-in SAS low-price calendar endpoint.");
+    console.log("  If SAS has changed it, run `capture` to rediscover and `diagnose` to check.");
+  }
+  console.log("\nNext:\n  node search.js pull --limit=3     # confirm it answers\n  node search.js pull\n");
+}
+
 /* ------------------------------------------------------------------- pull */
 
 /** Distinct YYYY-MM months touched by a date range. */
@@ -615,6 +714,7 @@ SAS EuroBonus award search
   node search.js login                 optional: log in if prices need an account
   node search.js capture               record a real search to learn the price request
   node search.js diagnose              re-check captured payloads offline: can prices be read?
+  node search.js recipe                skip capture: build the recipe from a known URL
   node search.js pull [--recipe=N]     replay it across routes/dates into the database
        --granularity=day|month         one request per date (rich) or per month (cheap)
   node search.js query [filters]       look up the pulled data offline
@@ -645,6 +745,7 @@ async function main() {
     case "login": return cmdLogin();
     case "capture": return cmdCapture();
     case "diagnose": return cmdDiagnose(argv);
+    case "recipe": return cmdRecipe(argv);
     case "pull": return cmdPull(argv);
     case "query": return cmdQuery(argv);
     case "report": return cmdReport();

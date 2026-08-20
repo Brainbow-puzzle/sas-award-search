@@ -58,6 +58,32 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Mirrors SAS's real date-picker shape: date-KEYED maps, an associatedFares
+  // matrix pairing each outbound date with every return date, and no cabin or
+  // seat information at all.
+  if (pathname === "/bff/datepicker/flights/offers/v1") {
+    const { origin, destination, departureDate, returnDate } = query;
+    const [y, m] = departureDate.split("-").map(Number);
+    const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const iso = (d) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const leg = (self, other) => {
+      const out = {};
+      for (let d = 1; d <= days; d++) {
+        const pts = priceFor(origin, destination, iso(d));
+        if (pts === null) continue;              // no award space that day
+        const assoc = {};
+        for (let e = d; e <= days; e++) {
+          assoc[iso(e)] = { totalPrice: other, points: pts, isStandardAward: true };
+        }
+        out[iso(d)] = { totalPrice: self, points: pts, isStandardAward: true, associatedFares: assoc };
+      }
+      return out;
+    };
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ currency: "DKK", outbound: leg(284, 70), inbound: leg(70, 284) }));
+    return;
+  }
+
   if (pathname === "/api/offers") {
     const { from, to, out } = query;
     const iso = `${out.slice(0, 4)}-${out.slice(4, 6)}-${out.slice(6, 8)}`;
