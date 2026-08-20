@@ -88,7 +88,10 @@ npx playwright install chromium
 cp config.example.json config.json     # set your origins, destinations, dates
 ```
 
-Node 18+ is required; SQLite is built into Node 22+ and needs no install.
+**Node 22 or newer is required.** The database uses `node:sqlite`, which is
+built into Node from 22 and does not exist before it — on Node 18 the tool
+fails at startup. Check with `node --version`. Nothing else to install:
+Playwright is the only dependency, and SQLite comes with Node.
 
 ## Use it
 
