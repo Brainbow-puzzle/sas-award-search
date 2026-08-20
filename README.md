@@ -95,6 +95,22 @@ Playwright is the only dependency, and SQLite comes with Node.
 
 ## Use it
 
+### 0. Establish a session (once, and again when it goes stale)
+
+```bash
+node search.js session --chrome
+```
+
+A real Chrome window opens on sas.dk. Accept or reject the cookie banner —
+either is fine, the choice just has to be made — wait for the page to settle,
+then press Enter. The cookies are saved to `.session.json` and reused by `pull`.
+
+This exists because Cloudflare fronts www.sas.dk and issues its `__cf_bm` cookie
+only to clients that actually load and run the page. A headless browser that
+never saw the consent banner collects nothing, and every API call comes back
+**403**. `__cf_bm` lasts about 30 minutes, so re-run this if a later pull starts
+getting refused.
+
 ### 1. Get a recipe
 
 The endpoint SAS's low-price calendar uses is already known, so there is nothing
@@ -303,7 +319,12 @@ whether any of this matches SAS's real site — only `capture` can tell you that
 
 ## Troubleshooting
 
-**HTTP 403 on every request.** Cloudflare fronts www.sas.dk and refuses clients
+**HTTP 403 on every request.** Run `node search.js session --chrome`, accept the
+cookie banner, then pull again. `pull` reports whether it has `__cf_bm` before it
+starts, which is the cookie that decides this. If it still fails, add `--headed
+--chrome` to `pull` so the whole run happens in a visible real Chrome.
+
+**Older note —** Cloudflare fronts www.sas.dk and refuses clients
 that have not loaded a page: no `__cf_bm` cookie, no `Referer`, no `sec-fetch-*`.
 `pull` opens the site once before replaying, and `recipe` writes those headers
 in, so this should not happen — if it does, run `capture` to record what your

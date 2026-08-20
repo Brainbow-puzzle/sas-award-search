@@ -82,10 +82,21 @@ function throttleDelay(cfg) {
 
 /* ------------------------------------------------------------------ login */
 
-async function cmdLogin() {
+async function cmdLogin(argv) {
   const { login } = require("./lib/browser.js");
   const cfg = fs.existsSync(CONFIG_PATH) ? loadConfig() : {};
-  await login({ startUrl: cfg.startUrl || DEFAULT_START_URL, storageStatePath: STATE_PATH });
+  await login({
+    startUrl: cfg.startUrl || DEFAULT_START_URL,
+    storageStatePath: STATE_PATH,
+    channel: browserChannel(argv, cfg),
+  });
+}
+
+/** Which browser build to drive: the installed Chrome, or Playwright's own. */
+function browserChannel(argv, cfg) {
+  if (argv.chrome) return "chrome";
+  if (argv.channel && argv.channel !== true) return argv.channel;
+  return cfg.browserChannel || null;
 }
 
 /* ---------------------------------------------------------------- capture */
@@ -334,7 +345,11 @@ async function cmdPull(argv) {
   }
 
   const { launch } = require("./lib/browser.js");
-  const { browser, context } = await launch({ headless: true, storageState: STATE_PATH });
+  const { browser, context } = await launch({
+    headless: !argv.headed,
+    storageState: STATE_PATH,
+    channel: browserChannel(argv, cfg),
+  });
 
   // Load the site itself before calling its API.
   //
@@ -355,7 +370,14 @@ async function cmdPull(argv) {
     await warmup.waitForTimeout(2500);
     await warmup.close();
     const named = (await context.cookies(origin)).map((c) => c.name);
-    console.log(named.length ? `${named.length} cookie(s)` : "no cookies set");
+    const cleared = named.includes("__cf_bm");
+    console.log(named.length ? `${named.length} cookie(s)${cleared ? ", including __cf_bm" : ""}` : "no cookies set");
+    if (!cleared) {
+      console.log("  Cloudflare has not cleared this browser (no __cf_bm), so requests are");
+      console.log("  likely to be refused. Run `node search.js session --chrome` first: it");
+      console.log("  opens a real window where you can accept the cookie banner, and saves");
+      console.log("  the result for `pull` to reuse.");
+    }
   } catch (e) {
     console.log(`could not open it (${e.message.split("\n")[0]})`);
   }
@@ -758,12 +780,14 @@ function parseArgs(args) {
 const USAGE = `
 SAS EuroBonus award search
 
-  node search.js login                 optional: log in if prices need an account
+  node search.js session [--chrome]    open a real browser once so the API stops refusing
+  node search.js login                 same thing; also lets you sign in
   node search.js capture               record a real search to learn the price request
   node search.js diagnose              re-check captured payloads offline: can prices be read?
   node search.js recipe                skip capture: build the recipe from a known URL
   node search.js pull [--recipe=N]     replay it across routes/dates into the database
        --granularity=day|month         one request per date (rich) or per month (cheap)
+       --headed --chrome               drive a visible / real-Chrome browser
   node search.js query [filters]       look up the pulled data offline
   node search.js report                build the HTML calendar report
   node search.js scan                  fallback: drive the UI page by page
@@ -789,7 +813,8 @@ async function main() {
   const argv = parseArgs(process.argv.slice(2));
   const cmd = argv._[0] || "help";
   switch (cmd) {
-    case "login": return cmdLogin();
+    case "login": return cmdLogin(argv);
+    case "session": return cmdLogin(argv);
     case "capture": return cmdCapture();
     case "diagnose": return cmdDiagnose(argv);
     case "recipe": return cmdRecipe(argv);
