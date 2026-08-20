@@ -1,0 +1,22 @@
+{
+  "name": "sas-award-search",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pull SAS EuroBonus award prices into a local SQLite database and query them offline.",
+  "main": "search.js",
+  "scripts": {
+    "login": "node search.js login",
+    "capture": "node search.js capture",
+    "pull": "node search.js pull",
+    "query": "node search.js query",
+    "report": "node search.js report",
+    "test": "node test-harvest.js && node test-plan.js",
+    "test:e2e": "node test-e2e.js && node test-replay-e2e.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

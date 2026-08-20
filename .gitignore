@@ -1,3 +1,7 @@
+# The repo root ignores package.json (Brainbow is a deliberately dependency-free
+# static site). This tool genuinely needs its manifest committed, so re-include it.
+!package.json
+
 # Never commit a logged-in session, personal search config, or scan output.
 .session.json
 config.json
