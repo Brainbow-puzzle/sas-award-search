@@ -853,6 +853,22 @@ function writeReport(offers, meta, cfg) {
   console.log(`\nHTML report: ${HTML_PATH}`);
 }
 
+/** The browsable page: filters, groupings and the ask box, all client-side. */
+function cmdBrowse(argv) {
+  const { buildBrowseHtml } = require("./lib/browse.js");
+  const store = openStore();
+  let rows, stats;
+  try { rows = store.allOffers(); stats = store.stats(); } finally { store.close(); }
+  if (!rows.length) throw new Error("No data yet — run `node search.js pull` first.");
+
+  const out = argv.out && argv.out !== true ? String(argv.out) : path.join(OUT_DIR, "browse.html");
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, buildBrowseHtml(rows, { generatedAt: stats.lastPull }));
+  const kb = Math.round(fs.statSync(out).size / 1024);
+  console.log(`\nBrowsable report: ${out}  (${num(rows.length)} price(s), ${num(kb)} KB)`);
+  console.log("Open it in a browser — it is one self-contained file and works offline.\n");
+}
+
 function cmdReport() {
   const cfg = fs.existsSync(CONFIG_PATH) ? loadConfig() : {};
   if (fs.existsSync(DB_PATH)) {
@@ -1043,6 +1059,7 @@ SAS EuroBonus award search
        --via=request                   send requests beside the page, not from within it
        --resume[=hours]                skip route/months already pulled (default 24h)
   node search.js query [filters]       look up the pulled data offline
+  node search.js browse                build the browsable page: filters, groups, ask box
   node search.js report                build the HTML calendar report
   node search.js scan                  fallback: drive the UI page by page
 
@@ -1089,6 +1106,7 @@ async function main() {
     case "pull": return cmdPull(argv);
     case "query": return cmdQuery(argv);
     case "report": return cmdReport();
+    case "browse": return cmdBrowse(argv);
     case "scan": return cmdScan(argv);
     default:
       console.log(USAGE);

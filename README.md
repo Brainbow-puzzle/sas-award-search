@@ -324,7 +324,32 @@ sqlite3 out/awards.db "SELECT destination, MIN(points) FROM offers
                        WHERE cabin='business' GROUP BY destination ORDER BY 2"
 ```
 
-### 5. Visual report
+### 5. Browse it
+
+```bash
+node search.js browse
+```
+
+Writes `out/browse.html`: one self-contained file, no assets and no network, so
+it opens from disk and keeps working offline. Group by country, type of trip,
+flight time, region or destination; filter by leg, points, hours and dates.
+
+There is also an ask box:
+
+```
+cheapest beach under 4 hours          -> tag=beach, maxHours=4
+spain in september                    -> country=Spain, 2026-09-01..2026-09-30
+new york in october                   -> JFK and EWR
+returns under 10000 points on a friday
+```
+
+It is a **parser, not a model**: it runs in the page, costs nothing, needs no
+key, and sends no part of your travel plans anywhere. The trade is that it knows
+a vocabulary rather than intent, so it always prints what it read *and what it
+ignored* — "somewhere warm with a hot tub" reports `warm` as a beach hint and
+`hot, tub` as not understood, instead of quietly returning everything.
+
+### 6. Calendar report
 
 ```bash
 node search.js report
